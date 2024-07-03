@@ -4,6 +4,20 @@ provider "aws" {
 
 data "aws_availability_zones" "available" {}
 
+locals {
+  name   = "wordpress"
+  region = var.aws_region
+
+  vpc_cidr = "10.0.0.0/16"
+  azs      = slice(data.aws_availability_zones.available.names, 0, 2)
+
+  tags = {
+    Name       = local.name
+    Example    = local.name
+    Repository = "https://github.com/terraform-aws-modules/terraform-aws-rds"
+  }
+}
+
 resource "aws_key_pair" "deployer" {
   key_name   = "deployer-key"
   public_key = file(var.public_key_path)
@@ -11,32 +25,32 @@ resource "aws_key_pair" "deployer" {
 
 # VPC
 module "vpc" {
-  source = "terraform-aws-modules/vpc/aws"
+  source  = "terraform-aws-modules/vpc/aws"
   version = "5.8.1"
 
-  name                              = "worpress-vpc"
-  cidr                              = "10.0.0.0/16"
-  azs                               = data.aws_availability_zones.available.names
-  public_subnets                    = ["10.0.1.0/24", "10.0.2.0/24"]
-  private_subnets                   = ["10.0.3.0/24", "10.0.4.0/24"]
-  database_subnets                  = ["10.0.5.0/24", "10.0.6.0/24"]
-  elasticache_subnets               = ["10.0.7.0/24", "10.0.8.0/24"]
-  enable_nat_gateway                = true
-  single_nat_gateway                = true
-  enable_dns_hostnames              = true
-  enable_dns_support                = true
-  create_database_subnet_group      = true
-  create_elasticache_subnet_group   = true
-  create_igw                        = true
+  name                            = local.name
+  cidr                            = local.vpc_cidr
+  azs                             = local.azs
+  public_subnets                  = ["10.0.1.0/24", "10.0.2.0/24"]
+  private_subnets                 = ["10.0.3.0/24", "10.0.4.0/24"]
+  database_subnets                = ["10.0.5.0/24", "10.0.6.0/24"]
+  elasticache_subnets             = ["10.0.7.0/24", "10.0.8.0/24"]
+  enable_nat_gateway              = true
+  single_nat_gateway              = true
+  enable_dns_hostnames            = true
+  enable_dns_support              = true
+  create_database_subnet_group    = true
+  create_elasticache_subnet_group = true
+  create_igw                      = true
 
-  tags = {
-    Name = "worpress-vpc"
-  }
+  tags = local.tags
 }
 
 # Security Group for EC2
 resource "aws_security_group" "ec2" {
-  vpc_id = module.vpc.vpc_id
+  name        = "${local.name}-ec2-sg"
+  description = "Security group for EC2 instances in ${local.name} VPC"
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     from_port   = 22
@@ -58,25 +72,32 @@ resource "aws_security_group" "ec2" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "${local.name}-ec2-sg"
+  }
 }
 
 # EC2 Instance
 module "ec2_instance" {
-  source = "terraform-aws-modules/ec2-instance/aws"
+  source  = "terraform-aws-modules/ec2-instance/aws"
   version = "5.6.1"
 
-  name                         = "wordpress"
+  name                         = local.name
   ami                          = "ami-0e872aee57663ae2d"
   instance_type                = "t2.micro"
   subnet_id                    = element(module.vpc.public_subnets, 0)
-  vpc_security_group_ids       = [module.vpc.default_security_group_id]
+  vpc_security_group_ids       = [aws_security_group.ec2.id]
   associate_public_ip_address  = true
   key_name                     = aws_key_pair.deployer.key_name
   user_data                    = file("${path.module}/scripts/user_data.sh")
 }
 
+# Security Group for RDS
 resource "aws_security_group" "rds" {
-  vpc_id = module.vpc.vpc_id
+  name        = "${local.name}-rds-sg"
+  description = "Security group for RDS in ${local.name} VPC"
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     from_port   = var.rds_port
@@ -91,6 +112,35 @@ resource "aws_security_group" "rds" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "${local.name}-rds-sg"
+  }
+}
+
+# Security Group for ElastiCache
+resource "aws_security_group" "elasticache" {
+  name        = "${local.name}-redis-sg"
+  description = "Security group for ElastiCache in ${local.name} VPC"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${local.name}-redis-sg"
+  }
 }
 
 # RDS MySQL Instance
@@ -98,27 +148,24 @@ module "rds" {
   source  = "terraform-aws-modules/rds/aws"
   version = "6.7.0"
 
-  identifier             = "wordpress-db"
+  identifier             = "${local.name}-db"
   allocated_storage      = 20
   engine                 = "mysql"
   engine_version         = "5.7"
-  instance_class         = "db.t2.micro"
-  db_name                = "mysql"
+  instance_class         = "db.t3.micro"
+  db_name                = "wordpress"
   username               = var.db_username
   password               = var.db_password
   port                   = var.rds_port
-  vpc_security_group_ids = [module.vpc.default_security_group_id]
+  vpc_security_group_ids = [aws_security_group.rds.id]
   maintenance_window     = "Mon:00:00-Mon:03:00"
   backup_window          = "03:00-06:00"
-  create_db_subnet_group = true
   subnet_ids             = module.vpc.database_subnets
-  create_monitoring_role = true
   major_engine_version   = "5.7"
   family                 = "mysql5.7"
+  create_db_subnet_group = true
 
-  tags = {
-    Name = "wordpress-db"
-  }
+  tags = local.tags
 }
 
 # ElastiCache Redis
@@ -126,20 +173,18 @@ module "elasticache" {
   source  = "terraform-aws-modules/elasticache/aws"
   version = "1.2.0"
 
-  engine                = "redis"
-  engine_version        = "6.x"
-  node_type             = "cache.t2.micro"
-  num_cache_nodes       = 1
-  automatic_failover_enabled = false
-  at_rest_encryption_enabled = true
-  transit_encryption_enabled = true
+  engine                      = "redis"
+  engine_version              = "6.x"
+  node_type                   = "cache.t2.micro"
+  num_cache_nodes             = 1
+  automatic_failover_enabled  = false
+  at_rest_encryption_enabled  = true
+  transit_encryption_enabled  = true
+  replication_group_id        = "${local.name}-redis"
+  subnet_ids                  = module.vpc.elasticache_subnets
+  security_group_ids          = [aws_security_group.elasticache.id]
+  create_security_group       = false
+  create_subnet_group         = true
 
-  create_replication_group = true
-  replication_group_id = "wordpress-redis"
-
-  subnet_ids             = module.vpc.private_subnets
-
-  tags = {
-    Name = "wordpress-redis"
-  }
+  tags = local.tags
 }
