@@ -25,3 +25,9 @@ variable "public_key_path" {
   description = "Path to the public key file to be used for the EC2 instance"
   type        = string
 }
+
+variable "auth_token" {
+  description = "Password for elasticache"
+  type        = string
+  sensitive   = true
+}

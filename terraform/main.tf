@@ -84,13 +84,20 @@ module "ec2_instance" {
   version = "5.6.1"
 
   name                         = local.name
-  ami                          = "ami-0e872aee57663ae2d"
+  ami                          = "ami-04e48bc4c1f6bd229"
   instance_type                = "t2.micro"
   subnet_id                    = element(module.vpc.public_subnets, 0)
   vpc_security_group_ids       = [aws_security_group.ec2.id]
   associate_public_ip_address  = true
   key_name                     = aws_key_pair.deployer.key_name
-  user_data                    = file("${path.module}/scripts/user_data.sh")
+  user_data                    = templatefile("${path.module}/scripts/user_data.sh.tpl", {
+    db_endpoint        = split(":", module.rds.db_instance_endpoint)[0],
+    db_name            = module.rds.db_instance_name,
+    db_username        = var.db_username,
+    db_password        = var.db_password,
+    redis_endpoint     = module.elasticache.replication_group_primary_endpoint_address
+    redis_password     = var.auth_token
+  })
 }
 
 # Security Group for RDS
@@ -158,12 +165,11 @@ module "rds" {
   password               = var.db_password
   port                   = var.rds_port
   vpc_security_group_ids = [aws_security_group.rds.id]
-  maintenance_window     = "Mon:00:00-Mon:03:00"
-  backup_window          = "03:00-06:00"
   subnet_ids             = module.vpc.database_subnets
   major_engine_version   = "5.7"
   family                 = "mysql5.7"
   create_db_subnet_group = true
+  manage_master_user_password = false
 
   tags = local.tags
 }
@@ -185,6 +191,7 @@ module "elasticache" {
   security_group_ids          = [aws_security_group.elasticache.id]
   create_security_group       = false
   create_subnet_group         = true
+  # auth_token                  = var.auth_token
 
   tags = local.tags
 }
