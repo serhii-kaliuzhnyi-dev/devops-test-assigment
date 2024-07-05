@@ -43,8 +43,9 @@ Create a `terraform.tfvars` file and populate it with your configuration:
 aws_region = "eu-central-1"
 db_username = "your_db_username"
 db_password = "your_db_password"
+rds_port    = "3306"
 public_key_path = "~/.ssh/id_rsa.pub"
-redis_endpoint = "your_redis_endpoint"
+auth_token = "your_redis_super_secret_password"
 ```
 
 #### 2.1 Generating an SSH Key Pair (If you don't have one) 🔑
